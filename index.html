@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roomie</title>
+
+<!-- A small free library that draws QR codes. It is loaded from the internet. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+<style>
+  /* CSS = the look. These are the colors and sizes used everywhere below. */
+  :root {
+    --bg: #eef2f7;
+    --ink: #1b2430;
+    --muted: #66758a;
+    --accent: #2f5bff;
+    --done: #1f9d6b;
+    --card: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    display: flex;
+    justify-content: center;
+    padding: 24px 16px;
+  }
+  main { width: 100%; max-width: 420px; }
+  h1 { font-size: 2rem; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border-radius: 16px; padding: 20px; }
+  input[type=text] {
+    width: 100%; padding: 14px; font-size: 1.1rem;
+    border: 2px solid #d5dce6; border-radius: 12px;
+  }
+  input[type=text]:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  button {
+    font-size: 1rem; padding: 12px 18px; border: 0; border-radius: 12px;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--accent); border: 2px solid var(--accent); }
+  .row { display: flex; gap: 8px; margin-top: 12px; }
+  .row input { flex: 1; }
+  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .code { font-weight: 700; letter-spacing: 2px; }
+  ul { list-style: none; padding: 0; margin: 16px 0 0; }
+  li { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid #e6ebf2; }
+  li input { width: 22px; height: 22px; }
+  li.done span { text-decoration: line-through; color: var(--muted); }
+  li .del { margin-left: auto; background: none; color: var(--muted); padding: 4px 8px; }
+  .empty { color: var(--muted); margin-top: 16px; }
+  #qrBox { display: flex; justify-content: center; padding: 16px 0; }
+  .hidden { display: none; }
+  dialog { border: 0; border-radius: 16px; padding: 24px; max-width: 340px; text-align: center; }
+  dialog::backdrop { background: rgba(27, 36, 48, .5); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Roomie</h1>
+  <p class="sub">One shared list for your apartment.</p>
+
+  <!-- SCREEN 1: type the Apartment Code -->
+  <section id="joinScreen" class="card">
+    <label for="codeInput"><strong>Apartment Code</strong></label>
+    <div class="row">
+      <input id="codeInput" type="text" placeholder="BRNO42" autocomplete="off" autocapitalize="characters">
+      <button id="joinBtn">Join</button>
+    </div>
+  </section>
+
+  <!-- SCREEN 2: the shopping list -->
+  <section id="listScreen" class="card hidden">
+    <header>
+      <div>Apartment <span class="code" id="codeLabel"></span></div>
+      <div>
+        <button class="ghost" id="qrBtn">Show QR</button>
+        <button class="ghost" id="leaveBtn">Leave</button>
+      </div>
+    </header>
+
+    <div class="row" style="margin-top:0">
+      <input id="itemInput" type="text" placeholder="Add an item, e.g. Milk" autocomplete="off">
+      <button id="addBtn">Add</button>
+    </div>
+
+    <ul id="list"></ul>
+    <p class="empty hidden" id="emptyMsg">Nothing to buy yet. Add the first item.</p>
+  </section>
+</main>
+
+<!-- The popup that shows the QR code -->
+<dialog id="qrDialog">
+  <strong>Scan to join</strong>
+  <div id="qrBox"></div>
+  <p class="sub" id="qrLink" style="word-break:break-all;font-size:.8rem"></p>
+  <button id="closeQr">Close</button>
+</dialog>
+
+<script>
+  // JavaScript = the behavior. Everything the app DOES is below.
+
+  // ---- 1. Grab the pieces of the page we need to change ----
+  const $ = (id) => document.getElementById(id);
+  const joinScreen = $("joinScreen");
+  const listScreen = $("listScreen");
+
+  // ---- 2. The data ----
+  // "items" is a list like [{ text: "Milk", done: false }, ...]
+  let code = null;   // the current Apartment Code
+  let items = [];
+
+  // For now the list is saved in THIS browser only (localStorage).
+  // Each Apartment Code gets its own saved list.
+  // Later we replace these two functions with calls to a server + database,
+  // and that is what makes the list shared between phones.
+  function load() {
+    try { items = JSON.parse(localStorage.getItem("roomie:" + code)) || []; }
+    catch { items = []; }
+  }
+  function save() {
+    try { localStorage.setItem("roomie:" + code, JSON.stringify(items)); }
+    catch { /* storage can be blocked; the app still works until reload */ }
+  }
+
+  // ---- 3. Drawing the list ----
+  // render() clears the list and rebuilds it from "items".
+  // Call it every time the data changes.
+  function render() {
+    const ul = $("list");
+    ul.innerHTML = "";
+    $("emptyMsg").classList.toggle("hidden", items.length > 0);
+
+    items.forEach((item, i) => {
+      const li = document.createElement("li");
+      if (item.done) li.className = "done";
+
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = item.done;
+      box.setAttribute("aria-label", "Bought " + item.text);
+      box.onchange = () => { items[i].done = box.checked; save(); render(); };
+
+      const label = document.createElement("span");
+      label.textContent = item.text;   // textContent is safe: it never runs typed text as code
+
+      const del = document.createElement("button");
+      del.className = "del";
+      del.textContent = "Remove";
+      del.onclick = () => { items.splice(i, 1); save(); render(); };
+
+      li.append(box, label, del);
+      ul.append(li);
+    });
+  }
+
+  // ---- 4. Joining an apartment ----
+  function joinApartment(raw) {
+    const clean = raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!clean) return;
+    code = clean;
+    load();
+    $("codeLabel").textContent = code;
+    joinScreen.classList.add("hidden");
+    listScreen.classList.remove("hidden");
+    render();
+  }
+
+  $("joinBtn").onclick = () => joinApartment($("codeInput").value);
+  $("codeInput").onkeydown = (e) => { if (e.key === "Enter") joinApartment(e.target.value); };
+
+  $("leaveBtn").onclick = () => {
+    code = null;
+    listScreen.classList.add("hidden");
+    joinScreen.classList.remove("hidden");
+    history.replaceState(null, "", location.pathname); // remove ?join=... from the address
+  };
+
+  // ---- 5. Adding items ----
+  function addItem() {
+    const text = $("itemInput").value.trim();
+    if (!text) return;
+    items.push({ text, done: false });
+    $("itemInput").value = "";
+    save();
+    render();
+  }
+  $("addBtn").onclick = addItem;
+  $("itemInput").onkeydown = (e) => { if (e.key === "Enter") addItem(); };
+
+  // ---- 6. The QR code ----
+  // The QR holds a LINK to this same page with the code at the end:
+  //   https://yourname.github.io/roomie/?join=BRNO42
+  // Scanning it with a normal phone camera opens that link.
+  function joinLink() {
+    return location.origin + location.pathname + "?join=" + code;
+  }
+
+  $("qrBtn").onclick = () => {
+    const box = $("qrBox");
+    box.innerHTML = "";
+    if (window.QRCode) {
+      new QRCode(box, { text: joinLink(), width: 200, height: 200 });
+    } else {
+      box.textContent = "QR library could not load. Check your internet connection.";
+    }
+    $("qrLink").textContent = joinLink();
+    $("qrDialog").showModal();
+  };
+  $("closeQr").onclick = () => $("qrDialog").close();
+
+  // ---- 7. When the page opens ----
+  // If the address contains ?join=BRNO42 (someone scanned the QR),
+  // skip the typing and go straight into that apartment.
+  const fromLink = new URLSearchParams(location.search).get("join");
+  if (fromLink) joinApartment(fromLink);
+</script>
+</body>
+</html>
